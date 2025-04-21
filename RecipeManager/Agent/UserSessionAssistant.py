@@ -23,7 +23,15 @@ from openai.types.chat import ChatCompletionMessageParam, ChatCompletionMessageT
 from RecipeManager.Agent import TOOL_SCHEMAS
 
 class UserSessionAgent(OpenAIClient):
-    # ───────────────────────────── init ─────────────────────────────
+    """Conversational agent assisting a shopper with meals and basket building.
+
+        * Maintains a running **LLM memory** summarised after 15 turns.
+        * Exposes OpenAI tool‑calling functions for vector search, price lookup,
+          basket ops, etc.
+        * Refreshes the system prompt’s basket line after every mutation.
+        * `checkout()` persists purchases and regenerates an embedding‑ready user
+          summary.  See inline docstrings for each tool.
+        """
     def __init__(self, api_key: str, user_name: str, session):
         super().__init__(api_key)
         self.session = session

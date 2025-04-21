@@ -23,7 +23,11 @@ from RecipeManager.Knowledge.models import Meal, Ingredient, MealIngredient, get
 from RecipeManager.Agent.OpenAIConnector import OpenAIClient
 
 class MealCrawler:
-    """Crawl MealDB API and return raw meal objects."""
+    """Crawl the public MealDB for *all* recipes (26 × A‑Z pass).
+
+    The crawler is **idempotent**: it returns raw payloads; DB persistence and
+    embedding are left to higher‑level loaders so tests can mock the HTTP layer
+    independently.  Optionally throttles requests (default 0.25 s)."""
 
     def __init__(self, throttle: float | None = 0.25) -> None:
         """
@@ -37,14 +41,7 @@ class MealCrawler:
         self.throttle = throttle
 
     def fetch_all_meals(self) -> List[Dict[str, Any]]:
-        """
-        Crawl A–Z and gather every recipe once.
-
-        Returns
-        -------
-        List[Dict[str, Any]]
-            Raw JSON dictionaries exactly as returned by the MealDB API.
-        """
+        """Return a list of **unique** recipe dictionaries from MealDB."""
         seen_ids: set[int] = set()
         all_meals: List[Dict[str, Any]] = []
 
@@ -82,21 +79,10 @@ class MealCrawler:
 
 
 def enrich_ingredient_via_llm(client: OpenAIClient, ingredient_name: str) -> Dict[str, str]:
-    """
-    Ask the LLM for a canonical description + type for an ingredient that is not
-    yet present in the database.
+    """Ask the LLM for a JSON description of *ingredient_name* (3 keys only).
 
-    Parameters
-    ----------
-    client : OpenAIClient
-        The LLM client instance.
-    ingredient_name : str
-        Name of the ingredient to enrich.
-
-    Returns
-    -------
-    Dict[str, str]
-        {"name": ..., "description": ..., "type": ...}
+    Falls back to empty strings if the LLM fails.  The JSON schema is enforced
+    via the function‑calling API.
     """
     system_msg = {
         "role": "system",

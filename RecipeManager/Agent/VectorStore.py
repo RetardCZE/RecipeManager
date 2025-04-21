@@ -29,11 +29,13 @@ class Result(NamedTuple):
 
 
 class BaseVectorStore:
-    """
-    Load vectors from SQLAlchemy rows → FAISS index (cosine similarity).
+    """Abstract FAISS wrapper providing embed‑&‑search for model vectors.
 
-    Sub‑classes must implement `_iter_rows()` yielding `(id, vector_json_str)`
-    """
+        Sub‑classes override :meth:`_iter_rows` to stream ``(id, json_vector)``
+        tuples from SQLAlchemy.  The constructor builds an in‑memory
+        **IndexFlatIP** (cosine via L2‑normalisation).  Retrieval returns a
+        ``List[Result]`` with DB‑primary‑keys and similarity scores.
+        """
 
     def __init__(
         self,
@@ -85,9 +87,8 @@ class BaseVectorStore:
 
     # ---------------------------------------------------------------- retrieve
     def retrieve(self, query: str, k: int = 5, normalize: bool = True) -> List[Result]:
-        """
-        Embed `query` with OpenAI, search FAISS, return top‑k ids & scores.
-        """
+        """Embed *query* with OpenAI and return top‑*k* nearest rows."""
+
         if self._index is None:
             return []
 

@@ -14,14 +14,6 @@ engine = create_engine(path)
 
 
 class MealIngredient(Base):
-    """
-    Link table Meal ↔ Ingredient with:
-    • meal_id      – FK to 'meals'
-    • pair_id      – position (1‑20) in the original API list  ← NEW / restored
-    • ingredient_id
-    • measure
-    Primary‑key is  (meal_id, pair_id)  so the same ingredient may appear twice.
-    """
     __tablename__ = 'meal_ingredient'
     meal_id       = Column(Integer, ForeignKey('meals.id'), primary_key=True)
     pair_id       = Column(Integer, primary_key=True)                 # NEW
@@ -96,5 +88,7 @@ class Customer(Base):
 Base.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)
 
-def get_session():
+def get_session() -> Session:
+    """Return a **new** SQLAlchemy session bound to the project’s SQLite database.
+    """
     return Session()

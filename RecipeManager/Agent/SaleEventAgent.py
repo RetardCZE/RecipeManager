@@ -1,73 +1,107 @@
 """
-Agent that detects ingredient sales and notifies users with recipe recommendations.
+SaleEventAgent
+==============
+
+Triggered once per “Publish sale” action.  It:
+
+1. Reads the current on‑sale ingredient IDs.
+2. Calculates sale_ratio = (#ingredients on sale / total) for every meal
+   using a single SQL JOIN + GROUP BY.
+3. Picks the top‑N meals (default 10).
+4. Extracts *pre‑computed* description_vectors from the DB and L2‑normalises
+   them for cosine similarity search.
+5. Returns a payload of meals + query vectors – user matching runs client‑side.
+
+No chat history, no multi‑loop reasoning: single call → single response.
 """
-from typing import List, Optional
-import random
-# Assuming MealDatabase and UserManager are accessible for querying data
-from RecipeManager.Knowledge.MealDatabase import Meal, Ingredient, MealIngredient, ShopItem
-from RecipeManager.Knowledge.UserManager import UserManager
+
+from __future__ import annotations
+import json
+import numpy as np
+from typing import List, Dict
+
+from RecipeManager.Knowledge import models as db
+from RecipeManager.Agent.VectorStore import UserSummaryVS
 
 
 class SaleEventAgent:
-    """
-    Agent to detect sales events in the shop and notify users with relevant recipe recommendations.
-    """
+    """One‑shot agent that, given current on‑sale items, returns:
 
-    def __init__(self, user_manager: UserManager):
+        * Top‑N meals ranked by *sale‑ingredient ratio*
+        * Normalised description vectors for client‑side user matching
         """
-        Initialize the sale event agent with access to the user manager.
+    def __init__(self, session, top_n: int = 10):
+        self.session = session
+        self.top_n = top_n
 
-        :param user_manager: UserManager instance to manage user data and notifications.
-        """
-        self.user_manager = user_manager
+    # ---------------------------------------------------------------- helpers
+    def _fetch_sale_ids(self) -> set[int]:
+        return {
+            row.ingredient_id
+            for row in self.session.query(db.ShopItem.ingredient_id)
+            .filter(db.ShopItem.on_sale.is_(True))
+            .all()
+        }
 
-    def detect_and_notify(self) -> None:
-        """
-        Detect ingredients that are on sale and send recipe recommendations to interested users.
-        For each ingredient on sale, find recipes containing that ingredient and notify users
-        who have previously purchased that ingredient (or all users if none have).
-        """
-        session = self.user_manager.db.session
-        # Query all ingredients currently on sale
-        sale_items: List[ShopItem] = session.query(ShopItem).filter(ShopItem.on_sale == True).all()
-        for sale_item in sale_items:
-            ingredient: Ingredient = sale_item.ingredient  # get the Ingredient object
-            if ingredient is None:
-                continue
-            # Find all meals that include this ingredient
-            meal_links: List[MealIngredient] = session.query(MealIngredient).filter(
-                MealIngredient.ingredient_id == ingredient.id).all()
-            if not meal_links:
-                continue
-            # Choose one meal to recommend (random choice for variety)
-            meal_link = random.choice(meal_links)
-            meal: Meal = meal_link.meal
-            # Construct a recommendation message
-            meal_name = meal.name
-            ingredient_name = ingredient.name
-            # Optionally include a short part of meal description if available
-            if meal.description:
-                # Use just the first sentence or brief snippet of description
-                snippet = meal.description.split('.')[0]
-                message = (f"Good news! {ingredient_name} is on sale. "
-                           f"You could use it to make \"{meal_name}\" - {snippet.strip()}...")
-            else:
-                message = (f"Good news! {ingredient_name} is on sale. "
-                           f"How about trying the recipe \"{meal_name}\" which uses it?")
-            # Determine which users to notify
-            interested_users = set()
-            # Users who purchased this ingredient before
-            purchases = [p for p in ingredient.purchases] if hasattr(ingredient, 'purchases') else []
-            for purchase in purchases:
-                interested_users.add(purchase.user_id)
-            # If no specific users, notify all users as a general recommendation
-            if not interested_users:
-                all_user_ids = [user.id for user in session.query(self.user_manager.User).all()]
-                interested_users = set(all_user_ids)
-            # Send notification to each interested user
-            for user_id in interested_users:
-                # Log the notification via UserManager (e.g., add to conversation history)
-                self.user_manager.add_conversation_entry(user_id=user_id, text=message, role="assistant")
-                # In a real system, this could send an email or app notification.
-                # Here we simply log to console for demonstration.
-                print(f"[Notification] User {user_id}: {message}")
+    def _rank_meals(self, sale_ids: set[int]) -> List[Dict]:
+        if not sale_ids:
+            return []
+
+        # JOIN meals → meal_ingredient → shop_items (sale flag)
+        q = (
+            self.session.query(
+                db.Meal.id,
+                db.Meal.name,
+                db.Meal.description_vector,
+                db.MealIngredient.ingredient_id,
+            )
+            .join(db.MealIngredient, db.Meal.id == db.MealIngredient.meal_id)
+        )
+
+        stats: Dict[int, Dict] = {}
+        for mid, name, vec_json, ing_id in q:
+            rec = stats.setdefault(mid, {"name": name, "vec": vec_json, "sale": 0, "total": 0})
+            rec["total"] += 1
+            if ing_id in sale_ids:
+                rec["sale"] += 1
+
+        scored = [
+            {
+                "meal_id": mid,
+                "name": rec["name"],
+                "sale_ratio": rec["sale"] / rec["total"],
+                "vec": rec["vec"],
+            }
+            for mid, rec in stats.items()
+            if rec["sale"] > 0
+        ]
+        return sorted(scored, key=lambda x: -x["sale_ratio"])[: self.top_n]
+
+    # ---------------------------------------------------------------- run
+    def run(self) -> Dict:
+        sale_ids = self._fetch_sale_ids()
+        ranked = self._rank_meals(sale_ids)
+
+        # normalise vectors for cosine similarity
+        for row in ranked:
+            vec = np.asarray(json.loads(row["vec"]), dtype="float32")
+            vec /= np.linalg.norm(vec) + 1e-9
+            row["vec"] = vec.tolist()
+
+        # shape for Streamlit client
+        return {
+            "meals": [
+                {"meal_id": r["meal_id"], "name": r["name"], "sale_ratio": r["sale_ratio"]}
+                for r in ranked
+            ],
+            "user_query_vectors": {r["meal_id"]: r["vec"] for r in ranked},
+        }
+
+
+# simple CLI test
+if __name__ == "__main__":
+    from RecipeManager.Knowledge.models import get_session
+
+    with get_session() as s:
+        agent = SaleEventAgent(s, top_n=5)
+        print(agent.run())

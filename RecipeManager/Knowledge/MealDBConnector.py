@@ -1,42 +1,48 @@
 import requests
 
 class TheMealDBClient:
+    """Lightweight wrapper for https://www.themealdb.com/ REST endpoints.
+
+        Each public method maps 1‑to‑1 to an API route and returns the JSON payload
+        as a Python `dict`.  Any network/HTTP error is swallowed and `None`
+        returned; callers should handle missing data explicitly.
+        """
     BASE_URL = "https://www.themealdb.com/api/json/v1/1/"
 
     def __init__(self):
         pass
 
-    def search_meal_by_name(self, name):
+    def search_meal_by_name(self, name) -> dict | None:
         return self._get("search.php", {"s": name})
 
-    def search_meal_by_first_letter(self, letter):
+    def search_meal_by_first_letter(self, letter) -> dict | None:
         return self._get("search.php", {"f": letter})
 
-    def lookup_meal_by_id(self, meal_id):
+    def lookup_meal_by_id(self, meal_id) -> dict | None:
         return self._get("lookup.php", {"i": meal_id})
 
-    def random_meal(self):
+    def random_meal(self) -> dict | None:
         return self._get("random.php")
 
-    def list_all_categories(self):
+    def list_all_categories(self) -> dict | None:
         return self._get("categories.php")
 
-    def list_all_areas(self):
+    def list_all_areas(self) -> dict | None:
         return self._get("list.php", {"a": "list"})
 
-    def list_all_ingredients(self):
+    def list_all_ingredients(self) -> dict | None:
         return self._get("list.php", {"i": "list"})
 
-    def filter_by_ingredient(self, ingredient):
+    def filter_by_ingredient(self, ingredient) -> dict | None:
         return self._get("filter.php", {"i": ingredient})
 
-    def filter_by_category(self, category):
+    def filter_by_category(self, category) -> dict | None:
         return self._get("filter.php", {"c": category})
 
-    def filter_by_area(self, area):
+    def filter_by_area(self, area) -> dict | None:
         return self._get("filter.php", {"a": area})
 
-    def _get(self, endpoint, params=None):
+    def _get(self, endpoint, params=None) -> dict | None:
         url = self.BASE_URL + endpoint
         try:
             response = requests.get(url, params=params)
